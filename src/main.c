@@ -55,11 +55,6 @@ static uint16_t messageIndex = 0;
 static uint16_t receivedIndex = 0;
 
 
-static float accel_x, accel_y, accel_z;
-static float gyro_x, gyro_y, gyro_z;
-static float temperature;
-
-
 #define FLAT_THRESHOLD_Z_MIN 0.8f
 #define FLAT_THRESHOLD_Z_MAX 1.2f
 #define TILTED_THRESHOLD_X 0.6f
@@ -162,23 +157,23 @@ static void displayReceivedSymbol(char symbol) {
     
     if (symbol == '.') {
         snprintf(displayBuffer, sizeof(displayBuffer), "DOT");
-        buzzer_play_tone(800, 100); 
+        buzzer_play_tone(660, 100); 
         set_red_led_status(true);
         vTaskDelay(pdMS_TO_TICKS(100));
         set_red_led_status(false);
     } else if (symbol == '-') {
         snprintf(displayBuffer, sizeof(displayBuffer), "DASH");
-        buzzer_play_tone(800, 300);  
+        buzzer_play_tone(660, 300);  
         set_red_led_status(true);
         vTaskDelay(pdMS_TO_TICKS(300));
         set_red_led_status(false);
     } else if (symbol == ' ') {
         snprintf(displayBuffer, sizeof(displayBuffer), "SPACE");
-        buzzer_play_tone(600, 50);   
+  
     } else {
-        snprintf(displayBuffer, sizeof(displayBuffer), "???");
+        snprintf(displayBuffer, sizeof(displayBuffer), "XXXXX");
     }
-    
+    clear_display();
     write_text(displayBuffer);
 }
 
@@ -259,9 +254,7 @@ static void imu_sensor_task(void *arg) {
 
         if (state == STATE_IDLE || state == STATE_DETECTING_POSITION) {
             if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
-                accel_x = ax; accel_y = ay; accel_z = az;
-                gyro_x = gx; gyro_y = gy; gyro_z = gz;
-                temperature = t;
+                currentPosition = detectPosition(ax, ay, az);  // position detection from accelerometer readings
             } else {
                 usb_serial_print("IMU read error\n");
                 vTaskDelay(pdMS_TO_TICKS(100));
@@ -269,7 +262,7 @@ static void imu_sensor_task(void *arg) {
             }
 
             
-            currentPosition = detectPosition(accel_x, accel_y, accel_z);  // position detection from accelerometer readings
+            
 
             if (currentPosition != lastPosition) {
                 lastPosition = currentPosition;
@@ -339,11 +332,7 @@ static void transmit_task(void *arg) {
                 }
                 
                 
-                char symbolStr[3] = {symbol.symbol, ' ', '\0'}; // sendindividual symbol via CDC 1 
-                if (tud_cdc_n_connected(CDC_ITF_TX)) {
-                    tud_cdc_n_write_str(CDC_ITF_TX, symbolStr);
-                    tud_cdc_n_write_flush(CDC_ITF_TX);
-                }
+                
                 buzzer_play_tone(1000, 100);
                 if (usb_serial_connected()) { 
                     usb_serial_print("__Symbol added to message__\n");
@@ -368,10 +357,10 @@ static void transmit_task(void *arg) {
             sendMessageToWorkstation();
   
             buzzer_play_tone(1000, 100);
-            if (usb_serial_connected()) { 
+            if (usb_serial_connected()) {
                 usb_serial_print("SENT!\n");
             }
-            vTaskDelay(pdMS_TO_TICKS(500));
+            vTaskDelay(pdMS_TO_TICKS(200));
 
         }
         
@@ -450,10 +439,10 @@ static void display_task(void *arg) {
         if (xQueueReceive(receiveQueue, &symbol, pdMS_TO_TICKS(100)) == pdTRUE) {
             setState(STATE_DISPLAYING_MESSAGE);
             displayReceivedSymbol(symbol);
+            vTaskDelay(pdMS_TO_TICKS(100));
             setState(STATE_IDLE);
         }
-        
-        vTaskDelay(pdMS_TO_TICKS(50));
+    
     }
 }
 
@@ -645,21 +634,9 @@ int main() {
     return 0;
 }
 void tud_cdc_rx_cb(uint8_t itf) {
-    //callback --- when data is received on a CDC interface
-    uint8_t buf[CFG_TUD_CDC_RX_BUFSIZE + 1];
-
-    uint32_t count = tud_cdc_n_read(itf, buf, sizeof(buf) - 1);
-    
-    if (count > 0) {
-        buf[count] = '\0';
-        
-        // Debug: echo back on CDC 0
-        if (usb_serial_connected()) {
-            usb_serial_print("Received on CDC ");
-            usb_serial_print(itf == 0 ? "0" : "1");
-            usb_serial_print(": ");
-            usb_serial_print((char*)buf);
-            usb_serial_print("\n");
-        }
-    }
+    if (usb_serial_connected()) {
+        usb_serial_print("Data available on CDC ");
+        usb_serial_print(itf == 0 ? "0" : "1");
+        usb_serial_print("\n");
+}
 }
