@@ -199,25 +199,37 @@ static void btn_fxn(uint gpio, uint32_t eventMask) {
 
 
 /**
- * @brief Task for detecting device position and generating Morse symbols
- *        (based on stable ICM-42670 initialization pattern)
+ * @brief sask for detecting device position and generating morse symbols
  */
 static void imu_sensor_task(void *arg) {
     (void)arg;
 
     float ax, ay, az, gx, gy, gz, t;
 
-    // Initialize the IMU safely with debug feedback
-    usb_serial_print("Initializing ICM-42670P...\n");
+    while (!tud_mounted() || !tud_cdc_n_connected(0)) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    
+    if (usb_serial_connected()) {
+        usb_serial_print("Initializing ICM-42670P...\n");
+    }
+
     if (init_ICM42670() == 0) {
-        usb_serial_print("ICM-42670P initialized successfully!\n");
+        if (usb_serial_connected()) {
+            usb_serial_print("ICM-42670P initialized successfully!\n");
+        }
+
 
         if (ICM42670_start_with_default_values() != 0) {
-            usb_serial_print("ICM-42670P failed to start with default values!\n");
+            if (usb_serial_connected()) {
+                usb_serial_print("ICM-42670P failed to start with default values!\n");
+            }
+
         }
     } else {
-        usb_serial_print("ICM-42670P initialization failed!\n");
-        // Retry a few times before giving up
+        if (usb_serial_connected()) {
+            usb_serial_print("ICM-42670P initialization failed!\n");
+        }
         for (int i = 0; i < 3; i++) {
             vTaskDelay(pdMS_TO_TICKS(500));
             if (init_ICM42670() == 0) {
@@ -234,7 +246,7 @@ static void imu_sensor_task(void *arg) {
         }
     }
 
-    // Initialize position state variables
+    //position state variables initialization
     DevicePosition lastPosition = POSITION_UNKNOWN;
     DevicePosition currentPosition = POSITION_UNKNOWN;
     TickType_t positionStartTime = 0;
@@ -246,7 +258,6 @@ static void imu_sensor_task(void *arg) {
         AppState state = getState();
 
         if (state == STATE_IDLE || state == STATE_DETECTING_POSITION) {
-            // Read IMU data and check for success
             if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
                 accel_x = ax; accel_y = ay; accel_z = az;
                 gyro_x = gx; gyro_y = gy; gyro_z = gz;
@@ -257,8 +268,8 @@ static void imu_sensor_task(void *arg) {
                 continue;
             }
 
-            // Detect position from accelerometer readings
-            currentPosition = detectPosition(accel_x, accel_y, accel_z);
+            
+            currentPosition = detectPosition(accel_x, accel_y, accel_z);  // position detection from accelerometer readings
 
             if (currentPosition != lastPosition) {
                 lastPosition = currentPosition;
@@ -319,37 +330,47 @@ static void transmit_task(void *arg) {
     for (;;) {
         if (xQueueReceive(symbolQueue, &symbol, pdMS_TO_TICKS(100)) == pdTRUE) {
             
-            // message to buffer
-            if (addSymbolToMessage(symbol.symbol)) {
+           
+            if (addSymbolToMessage(symbol.symbol))  // message to buffer
+            {
                 // imp- space between symbols
                 if (symbol.symbol != ' ') {
                     addSymbolToMessage(' ');
                 }
                 
-                // sendindividual symbol via CDC 1 
-                char symbolStr[3] = {symbol.symbol, ' ', '\0'};
+                
+                char symbolStr[3] = {symbol.symbol, ' ', '\0'}; // sendindividual symbol via CDC 1 
                 if (tud_cdc_n_connected(CDC_ITF_TX)) {
                     tud_cdc_n_write_str(CDC_ITF_TX, symbolStr);
                     tud_cdc_n_write_flush(CDC_ITF_TX);
                 }
                 buzzer_play_tone(1000, 100);
-                usb_serial_print("__Symbol added to message__\n");
+                if (usb_serial_connected()) { 
+                    usb_serial_print("__Symbol added to message__\n");
+                }
             } else {
-                usb_serial_print("__Message buffer full!__\n");
+                if (usb_serial_connected()) { 
+                    usb_serial_print("__Message buffer full!__\n");
+                }
                 buzzer_play_tone(1000, 1000);
             }
             
             setState(STATE_IDLE);
         }
         
-        // button presse checker for sendingcomplete message
-        if (button2Pressed) {
+        
+        if (button2Pressed) // button presse checker for sendingcomplete message
+        {
             button2Pressed = false;
-            usb_serial_print("__Sending message...__\n");
+            if (usb_serial_connected()) { 
+                usb_serial_print("__Sending message...__\n");
+            }
             sendMessageToWorkstation();
   
             buzzer_play_tone(1000, 100);
-            usb_serial_print("SENT!");
+            if (usb_serial_connected()) { 
+                usb_serial_print("SENT!\n");
+            }
             vTaskDelay(pdMS_TO_TICKS(500));
 
         }
@@ -384,8 +405,9 @@ static void receive_task(void *arg) {
     
                         xQueueSend(receiveQueue, &c, 0);
                         
-                        // push to received message buffer
-                        if (receivedIndex < MAX_MESSAGE_LENGTH - 1) {
+                        
+                        if (receivedIndex < MAX_MESSAGE_LENGTH - 1) // push to received message buffer
+                        {
                             receivedMessage[receivedIndex++] = c;
                         }
                     }
@@ -447,28 +469,18 @@ static void usb_task(void *arg) {
 
 static void startup_task(void *arg) {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(300));
-
-    stateMutex = xSemaphoreCreateMutex();
-
-    symbolQueue = xQueueCreate(1, sizeof(MorseSymbol));
-    receiveQueue = xQueueCreate(1, sizeof(char));
-
-    if (stateMutex == NULL || symbolQueue == NULL || receiveQueue == NULL) {
-        usb_serial_print("MEM-FAIL");
-        while(1) {
-            gpio_put(LED1, 1);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            gpio_put(LED1, 0);
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
+    
+    
+    while (!tud_mounted() || !tud_cdc_n_connected(0)) {
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
 
-
-    usb_serial_print("READY");
+    if (usb_serial_connected()) {
+        usb_serial_print("System READY\n");
+    }
+    
     buzzer_play_tone(1000, 100);
-    vTaskDelay(pdMS_TO_TICKS(1000));  
     
     
     vTaskDelete(NULL);
@@ -515,12 +527,8 @@ int main() {
     
 
     init_red_led(); 
-
-    gpio_put(LED1, 1);
-    sleep_ms(1000);
-    gpio_put(LED1, 0);
-    sleep_ms(500);
-
+    init_display();
+    clear_display();
     init_rgb_led();
     stop_rgb_led();
     init_button1();
@@ -533,7 +541,20 @@ int main() {
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL, true, btn_fxn);
     gpio_set_irq_enabled_with_callback(BUTTON2, GPIO_IRQ_EDGE_FALL, true, btn_fxn);
 
+    stateMutex = xSemaphoreCreateMutex();
     
+    symbolQueue = xQueueCreate(10, sizeof(MorseSymbol));
+    receiveQueue = xQueueCreate(50, sizeof(char));
+
+    if (stateMutex == NULL || symbolQueue == NULL || receiveQueue == NULL) {
+        usb_serial_print("MEM-FAIL");
+        while(1) {
+            gpio_put(LED1, 1);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            gpio_put(LED1, 0);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
 
 
     //clear_display();
@@ -541,37 +562,34 @@ int main() {
     //buzzer_play_tone(1000, 100);
     //vTaskDelay(pdMS_TO_TICKS(500));
     //clear_display();
-    
-
-    
-
-
-    
   
     TaskHandle_t hStartup, hIMU, hTransmit, hReceive, hDisplay, hUSB = NULL;
     
     BaseType_t result;
 
-    result = xTaskCreate(display_task, "display", 1024, NULL, 2, &hDisplay);
-
+    result = xTaskCreate(usb_task, "usb", 1024, NULL, 4, &hUSB);
+   
     if (result != pdPASS) {
 
     while(1) { gpio_put(LED1, 1); sleep_ms(100); gpio_put(LED1, 0); sleep_ms(100); }
 }
-
+    
+    #if (configNUMBER_OF_CORES > 1)
+        vTaskCoreAffinitySet(hUSB, 1u << 0);
+    #endif
+    
     result = xTaskCreate(startup_task, "startup", 1536, NULL, 3, &hStartup);
 
+
     if (result != pdPASS) {
 
     while(1) { gpio_put(LED1, 1); sleep_ms(100); gpio_put(LED1, 0); sleep_ms(100); }
 }
 
-    
-    result = xTaskCreate(imu_sensor_task, "imu", 1536, NULL, 2, &hIMU);
+   result = xTaskCreate(imu_sensor_task, "imu", 1536, NULL, 2, &hIMU);
     if (result != pdPASS) {
     while(1) { gpio_put(LED1, 1); sleep_ms(100); gpio_put(LED1, 0); sleep_ms(100); }
 }
-
 
 
     result = xTaskCreate(transmit_task, "transmit", 1024, NULL, 2, &hTransmit);
@@ -582,35 +600,26 @@ int main() {
 }
 
 
-
-
     result = xTaskCreate(receive_task, "receive", 1024, NULL, 2, &hReceive);
 
     if (result != pdPASS) {
 
     while(1) { gpio_put(LED1, 1); sleep_ms(100); gpio_put(LED1, 0); sleep_ms(100); }
 }
-  
 
 
-
-    
-    
+    result = xTaskCreate(display_task, "display", 1024, NULL, 2, &hDisplay);
 
 
-    
-
-    result = xTaskCreate(usb_task, "usb", 1024, NULL, 4, &hUSB);
 
     if (result != pdPASS) {
 
     while(1) { gpio_put(LED1, 1); sleep_ms(100); gpio_put(LED1, 0); sleep_ms(100); }
 }
+    
 
 
-    #if (configNUMBER_OF_CORES > 1)
-        vTaskCoreAffinitySet(hUSB, 1u << 0);
-    #endif
+    
 
 
     
@@ -634,4 +643,23 @@ int main() {
     while(1) { sleep_ms(1000); }
     
     return 0;
+}
+void tud_cdc_rx_cb(uint8_t itf) {
+    //callback --- when data is received on a CDC interface
+    uint8_t buf[CFG_TUD_CDC_RX_BUFSIZE + 1];
+
+    uint32_t count = tud_cdc_n_read(itf, buf, sizeof(buf) - 1);
+    
+    if (count > 0) {
+        buf[count] = '\0';
+        
+        // Debug: echo back on CDC 0
+        if (usb_serial_connected()) {
+            usb_serial_print("Received on CDC ");
+            usb_serial_print(itf == 0 ? "0" : "1");
+            usb_serial_print(": ");
+            usb_serial_print((char*)buf);
+            usb_serial_print("\n");
+        }
+    }
 }
