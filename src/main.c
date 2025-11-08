@@ -137,7 +137,7 @@ static void sendMessageToWorkstation(void) {
             
 
             blink_red_led(2);
-            buzzer_play_tone(1000, 100);
+            buzzer_play_tone(6000, 100);
             
             // CDC 0 for debug
             usb_serial_print("__Message sent successfully__\n");
@@ -327,10 +327,10 @@ static void transmit_task(void *arg) {
             if (addSymbolToMessage(symbol.symbol))  // message to buffer
             {
                 // imp- space between symbols
-                if (symbol.symbol != ' ') {
-                    addSymbolToMessage(' ');
-                }
-                
+                //if (symbol.symbol != ' ') {
+                   // addSymbolToMessage(' ');
+                //}
+                //addSymbolToMessage(symbol.symbol);
                 
                 
                 buzzer_play_tone(1000, 100);
