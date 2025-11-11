@@ -33,7 +33,7 @@ endif()
 # ================================================================================================
 
 # == DO NOT EDIT:  SETUP pico SDK and create project ==============================================
-set(PICO_BOARD pico CACHE STRING "Board type")
+set(PICO_BOARD pico_w CACHE STRING "Board type")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
@@ -111,6 +111,8 @@ add_subdirectory(examples/hello_serial_bidirectional_client)
 # If you add the headers in a different directory, you should use: target_include_directories
 add_executable(${MAIN_TARGET}
     src/main.c
+    src/wifi.c
+    src/morse_translator.c
     libs/usb-serial-debug 
 )
 
@@ -134,7 +136,8 @@ target_link_libraries(${MAIN_TARGET}
 # Include libraries necessaries to control the WiFi. If you are using the internal pico LED in W model, it is also 
 # necessary 
 if (PICO_CYW43_SUPPORTED)
-    target_link_libraries(${MAIN_TARGET} pico_cyw43_arch_none)
+    target_link_libraries(${MAIN_TARGET} pico_cyw43_arch_lwip_threadsafe_background)
+    target_include_directories(${MAIN_TARGET} INTERFACE ${CMAKE_CURRENT_LIST_DIR}/config)
 endif()
 
 #Support for stdio (printf, fwrite, puts...) via usb or UART. 

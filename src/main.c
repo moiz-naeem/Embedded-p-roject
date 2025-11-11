@@ -12,6 +12,9 @@
 #include "tusb.h"
 
 #include "usbSerialDebug/helper.h"
+#include "morse_translator.h"
+#include "wifi.h"
+
 // Exercise 4. Include the libraries necessaries to use the usb-serial-debug, and tinyusb
 // Tehtävä 4 . Lisää usb-serial-debugin ja tinyusbin käyttämiseen tarvittavat kirjastot.
 
@@ -45,14 +48,21 @@ typedef struct {
 
 static AppState currentState = STATE_IDLE;
 static SemaphoreHandle_t stateMutex = NULL;
-static QueueHandle_t symbolQueue = NULL;
-static QueueHandle_t receiveQueue = NULL;
+// Queue handles - non-static so wifi.c can access them
+QueueHandle_t symbolQueue = NULL;
+QueueHandle_t receiveQueue = NULL;
 
 
 static char outgoingMessage[MAX_MESSAGE_LENGTH];
 static char receivedMessage[MAX_MESSAGE_LENGTH];
 static uint16_t messageIndex = 0;
 static uint16_t receivedIndex = 0;
+
+// Translation buffers
+static char currentMorsePattern[10];  // Current letter being decoded (max morse = 5 chars)
+static uint8_t patternIndex = 0;
+static char translatedWord[32];       // Translated letters accumulate here
+static uint8_t wordIndex = 0;
 
 
 #define FLAT_THRESHOLD_Z_MIN 0.8f
@@ -120,6 +130,36 @@ static bool addSymbolToMessage(char symbol) {
 }
 
 /**
+ * @brief translate outgoing morse message to plain text
+ */
+static void translateOutgoingMessage(const char *morse_msg, char *translated, uint16_t max_len) {
+    char pattern[10];
+    uint8_t pattern_idx = 0;
+    uint16_t trans_idx = 0;
+    
+    for (int i = 0; morse_msg[i] != '\0' && trans_idx < max_len - 1; i++) {
+        char c = morse_msg[i];
+        
+        if (c == '.' || c == '-') {
+            // Accumulate morse pattern
+            if (pattern_idx < sizeof(pattern) - 1) {
+                pattern[pattern_idx++] = c;
+            }
+        } else if (c == ' ') {
+            // Translate pattern to letter
+            if (pattern_idx > 0) {
+                pattern[pattern_idx] = '\0';
+                char letter = morse_to_letter(pattern);
+                translated[trans_idx++] = letter;
+                pattern_idx = 0;
+            }
+        }
+    }
+    
+    translated[trans_idx] = '\0';
+}
+
+/**
  * @brief send complete message via USB CDC
  */
 static void sendMessageToWorkstation(void) {
@@ -129,6 +169,24 @@ static void sendMessageToWorkstation(void) {
         outgoingMessage[messageIndex++] = ' ';
         outgoingMessage[messageIndex++] = '\n';
         outgoingMessage[messageIndex] = '\0';
+        
+        // Translate morse to plain text and display on LCD
+        char translatedMsg[32];
+        translateOutgoingMessage(outgoingMessage, translatedMsg, sizeof(translatedMsg));
+        
+        if (strlen(translatedMsg) > 0) {
+            // Using display conflicts with IMU sensor
+            // Just play distinctive tone and print to serial
+            buzzer_play_tone(1200, 100);  // Preview tone for outgoing
+            buzzer_play_tone(1500, 100);  // Second tone = sending translated message
+            
+            // Debug output
+            if (usb_serial_connected()) {
+                usb_serial_print(">>SENDING: ");
+                usb_serial_print(translatedMsg);
+                usb_serial_print("<<\n");
+            }
+        }
         
         // senf via CDC interface 1 (data)
         if (tud_cdc_n_connected(CDC_ITF_TX)) {
@@ -140,7 +198,15 @@ static void sendMessageToWorkstation(void) {
             buzzer_play_tone(6000, 100);
             
             // CDC 0 for debug
-            usb_serial_print("__Message sent successfully__\n");
+            usb_serial_print("__Message sent via USB__\n");
+        }
+        
+        // Also send via WiFi UDP (broadcast to all devices on network)
+        if (wifi_send_message(outgoingMessage)) {
+            usb_serial_print("__Message sent via WiFi__\n");
+            buzzer_play_tone(7000, 100);  // Higher tone for WiFi success
+        } else {
+            usb_serial_print("__WiFi send failed__\n");
         }
         
         // buffer reset
@@ -438,7 +504,72 @@ static void display_task(void *arg) {
     for (;;) {
         if (xQueueReceive(receiveQueue, &symbol, pdMS_TO_TICKS(100)) == pdTRUE) {
             setState(STATE_DISPLAYING_MESSAGE);
-            displayReceivedSymbol(symbol);
+            
+            if (symbol == '.' || symbol == '-') {
+                // Accumulate morse pattern for current letter
+                if (patternIndex < sizeof(currentMorsePattern) - 1) {
+                    currentMorsePattern[patternIndex++] = symbol;
+                }
+                
+                // Still show the individual symbol
+                displayReceivedSymbol(symbol);
+                
+            } else if (symbol == ' ') {
+                // Space = end of letter, translate it
+                if (patternIndex > 0) {
+                    currentMorsePattern[patternIndex] = '\0';
+                    char letter = morse_to_letter(currentMorsePattern);
+                    
+                    // Add letter to word buffer
+                    if (wordIndex < sizeof(translatedWord) - 1) {
+                        translatedWord[wordIndex++] = letter;
+                    }
+                    
+                    // Debug: show letter on serial
+                    if (usb_serial_connected()) {
+                        char debug_msg[32];
+                        snprintf(debug_msg, sizeof(debug_msg), "Translated: %c\n", letter);
+                        usb_serial_print(debug_msg);
+                    }
+                    
+                    // Reset pattern buffer for next letter
+                    patternIndex = 0;
+                    memset(currentMorsePattern, 0, sizeof(currentMorsePattern));
+                }
+                
+                // Show space on display
+                displayReceivedSymbol(symbol);
+                
+            } else if (symbol == '\n') {
+                // Newline = end of word, display translation!
+                translatedWord[wordIndex] = '\0';
+                
+                if (wordIndex > 0) {
+                    // Flash the translated word on LCD
+                    clear_display();
+                    write_text(translatedWord);
+                    buzzer_play_tone(1500, 300);  // Success tone
+                    
+                    // Debug output
+                    if (usb_serial_connected()) {
+                        usb_serial_print("==WORD: ");
+                        usb_serial_print(translatedWord);
+                        usb_serial_print("==\n");
+                    }
+                    
+                    vTaskDelay(pdMS_TO_TICKS(2000));  // Show word for 2 seconds
+                }
+                
+                // Reset word buffer for next word
+                wordIndex = 0;
+                patternIndex = 0;
+                memset(translatedWord, 0, sizeof(translatedWord));
+                memset(currentMorsePattern, 0, sizeof(currentMorsePattern));
+            } else {
+                // Unknown symbol, just display it
+                displayReceivedSymbol(symbol);
+            }
+            
             vTaskDelay(pdMS_TO_TICKS(100));
             setState(STATE_IDLE);
         }
@@ -606,6 +737,12 @@ int main() {
     while(1) { gpio_put(LED1, 1); sleep_ms(100); gpio_put(LED1, 0); sleep_ms(100); }
 }
     
+    // --- create wifi task for Pico W ---
+    // use larger stack for cyw43 + lwIP (4KB)
+    result = xTaskCreate(wifi_task, "wifi", 4096, NULL, 2, NULL);
+    if (result != pdPASS) {
+        // WiFi task creation failed.
+    }
 
 
     
