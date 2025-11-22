@@ -605,6 +605,51 @@ static void startup_task(void *arg) {
     
     vTaskDelete(NULL);
 }
+
+/**
+static void light_sensor_task(void *arg) {
+    (void)arg;
+    const float DOT_THRESHOLD = 30.0f;  // for .
+    const float DASH_THRESHOLD = 120.0f; // for - 
+    const TickType_t SAMPLE_PERIOD = pdMS_TO_TICKS(50);
+    bool lastSignalHigh = false;
+    TickType_t signalStartTime = 0;
+
+    for (;;) {
+        float lux = veml6030_read_lux(); 
+        TickType_t now = xTaskGetTickCount();
+
+        if (lux > DOT_THRESHOLD) {
+            if (!lastSignalHigh) {
+                signalStartTime = now;
+                lastSignalHigh = true;
+            }
+        } else {
+            if (lastSignalHigh) {
+                TickType_t duration = now - signalStartTime;
+                MorseSymbol symbol;
+                symbol.timestamp = now;
+
+                if (duration < pdMS_TO_TICKS(300)) {
+                    symbol.symbol = '.'; //light is on for shorter time for .
+                } else {
+                    symbol.symbol = '-'; //light is on for longer time for -
+                }
+
+                if (xQueueSend(symbolQueue, &symbol, 0) != pdTRUE) {
+                    usb_serial_print("Symbol queue full!\n");
+                }
+
+                lastSignalHigh = false;
+            }
+        }
+
+        vTaskDelay(SAMPLE_PERIOD);
+    }
+} */
+
+
+
 // Exercise 4: Uncomment the following line to activate the TinyUSB library.  
 // Tehtävä 4:  Poista seuraavan rivin kommentointi aktivoidaksesi TinyUSB-kirjaston. 
 
@@ -654,6 +699,7 @@ int main() {
     init_button1();
     init_button2();   
     init_buzzer();
+    init_velm6030();
 
 
     
@@ -743,6 +789,12 @@ int main() {
     if (result != pdPASS) {
         // WiFi task creation failed.
     }
+
+   /* result = xTaskCreate(light_sensor_task, "light_sensor", 1024, NULL, 2, NULL);
+
+    if (result != pdPASS) {
+    while(1) { gpio_put(LED1, 1); sleep_ms(100); gpio_put(LED1, 0); sleep_ms(100); }
+} */
 
 
     
