@@ -9,7 +9,7 @@
 #include <semphr.h>
 #include "tkjhat/sdk.h"
 #include "tusb.h"
-
+#include "pico/cyw43_arch.h"
 #include "usbSerialDebug/helper.h"
 #include "morse_translator.h"
 #include "wifi.h"
@@ -308,6 +308,24 @@ static void btn_fxn(uint gpio, uint32_t eventMask)
     }
 }
 
+static void play_usb_receive_tone(void)
+{
+    buzzer_play_tone(523, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    buzzer_play_tone(659, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    buzzer_play_tone(784, 150);
+}
+
+static void play_wifi_receive_tone(void)
+{
+    buzzer_play_tone(880, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    buzzer_play_tone(1047, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    buzzer_play_tone(1319, 150);
+}
+
 /**
  * @brief task for detecting device position and generating morse symbols
  */
@@ -471,9 +489,13 @@ static void transmit_task(void *arg)
 
                 if (strlen(translatedMsg) > 0)
                 {
-                    //buzzer_play_tone(1200, 100);
-                    //buzzer_play_tone(1500, 100);
-
+                     buzzer_play_tone(392, 200);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    buzzer_play_tone(523, 200);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    buzzer_play_tone(659, 200);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    buzzer_play_tone(784, 400);
                     if (usb_serial_connected())
                     {
                         usb_serial_print(">>WIFI SENDING: ");
@@ -526,8 +548,16 @@ static void transmit_task(void *arg)
 
                 if (strlen(translatedMsg) > 0)
                 {
-                    //buzzer_play_tone(1200, 100);
-                    //buzzer_play_tone(1500, 100);
+                    buzzer_play_tone(659, 150);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    buzzer_play_tone(659, 150);
+                    vTaskDelay(pdMS_TO_TICKS(100));
+
+                    buzzer_play_tone(784, 150);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    buzzer_play_tone(698, 150);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    buzzer_play_tone(659, 300);
 
                     if (usb_serial_connected())
                     {
@@ -624,6 +654,9 @@ static void receive_task(void *arg)
                             usb_serial_print("__Complete message received via USB__\n");
                         }
 
+                        char source_marker = 'U';
+                        xQueueSend(receiveQueue, &source_marker, 0);
+                        
                         char newline = '\n';
                         xQueueSend(receiveQueue, &newline, 0);
 
@@ -639,7 +672,6 @@ static void receive_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(150));
     }
 }
-
 /**
  * @brief task for displaying received symbols and translating morse
  * shows individua symbols then displays translated word for
@@ -649,12 +681,19 @@ static void display_task(void *arg)
 {
     (void)arg;
     char symbol;
+    char message_source = 'U';
 
     for (;;)
     {
         if (xQueueReceive(receiveQueue, &symbol, pdMS_TO_TICKS(100)) == pdTRUE)
         {
             setState(STATE_DISPLAYING_MESSAGE);
+
+            if (symbol == 'U' || symbol == 'W')
+            {
+                message_source = symbol;
+                continue;
+            }
 
             if (symbol == '.' || symbol == '-')
             {
@@ -699,14 +738,30 @@ static void display_task(void *arg)
                 {
                     setState(STATE_TRANSLATING_DISPLAY);
 
+                    if (message_source == 'W')
+                    {
+                        play_wifi_receive_tone();
+                    }
+                    else
+                    {
+                        play_usb_receive_tone();
+                    }
+
                     clear_display();
                     write_text(translatedWord);
-                    
 
                     if (usb_serial_connected())
                     {
                         usb_serial_print("\n==WORD: ");
                         usb_serial_print(translatedWord);
+                        if (message_source == 'W')
+                        {
+                            usb_serial_print(" (WiFi)");
+                        }
+                        else
+                        {
+                            usb_serial_print(" (USB)");
+                        }
                         usb_serial_print("==\n");
                     }
 
@@ -718,6 +773,7 @@ static void display_task(void *arg)
                 patternIndex = 0;
                 memset(translatedWord, 0, sizeof(translatedWord));
                 memset(currentMorsePattern, 0, sizeof(currentMorsePattern));
+                message_source = 'U';
 
                 setState(STATE_IDLE);
                 setMode(MODE_IDLE);
@@ -728,7 +784,6 @@ static void display_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
-
 static void usb_task(void *arg)
 {
     (void)arg;
@@ -808,6 +863,9 @@ int main()
     sleep_ms(200);
     ICM42670_start_with_default_values();
     sleep_ms(200);
+    cyw43_arch_init();
+    sleep_ms(200);
+
 
      
     

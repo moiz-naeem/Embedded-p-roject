@@ -48,6 +48,9 @@ static void udp_recv_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                     }
                 }
             }
+            
+            char source_marker = 'W';
+            xQueueSend(receiveQueue, &source_marker, 0);
         }
         pbuf_free(p);
     }
@@ -64,28 +67,24 @@ void wifi_task(void *pvParams) {
 
     vTaskDelay(pdMS_TO_TICKS(3000));
     
-    // visual feedback wifi task started
     blink_red_led(3);
     
-
-    if (cyw43_arch_init()) {
-
-        while(1) {
-           // buzzer_play_tone(200, 100);
-            vTaskDelay(pdMS_TO_TICKS(200));
-        }
-    }
-
-    //buzzer_play_tone(1000, 100);
-
+    usb_serial_print("==WiFi task started==\n");
 
     cyw43_arch_enable_sta_mode();
-
+    vTaskDelay(pdMS_TO_TICKS(100));
     int max_retries = 5;
     int retry_count = 0;
     bool connected = false;
     
+    usb_serial_print("Connecting to WiFi: ");
+    usb_serial_print(WIFI_SSID);
+    usb_serial_print("\n");
+    
     while (retry_count < max_retries && !connected) {
+        char attempt_msg[32];
+        snprintf(attempt_msg, sizeof(attempt_msg), "Attempt %d/%d...\n", retry_count + 1, max_retries);
+        usb_serial_print(attempt_msg);
 
         toggle_red_led();
         if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PSK, 
@@ -93,24 +92,31 @@ void wifi_task(void *pvParams) {
             connected = true;
 
             set_red_led_status(true);
-            //buzzer_play_tone(2000, 200);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            //buzzer_play_tone(2500, 200);
             vTaskDelay(pdMS_TO_TICKS(300));
             set_red_led_status(false);
         } else {
             retry_count++;
-            toggle_red_led(); 
+            toggle_red_led();
+            usb_serial_print("Connection failed, retrying...\n");
             if (retry_count < max_retries) {
-                //buzzer_play_tone(500, 100);
                 vTaskDelay(pdMS_TO_TICKS(2000));
             }
         }
     }
     
-    if (!connected) {
+    if (connected) {
+        usb_serial_print("==WiFi CONNECTED!==\n");
+        usb_serial_print("IP Address: ");
+        usb_serial_print(ip4addr_ntoa(netif_ip4_addr(netif_list)));
+        usb_serial_print("\n");
+        usb_serial_print("Gateway: ");
+        usb_serial_print(ip4addr_ntoa(netif_ip4_gw(netif_list)));
+        usb_serial_print("\n");
+        
+        blink_red_led(5);
+    } else {
+        usb_serial_print("==WiFi connection FAILED after all retries!==\n");
         for (int i = 0; i < 5; i++) {
-            //buzzer_play_tone(300, 200);
             vTaskDelay(pdMS_TO_TICKS(300));
         }
         cyw43_arch_deinit();
@@ -118,19 +124,20 @@ void wifi_task(void *pvParams) {
         return;
     }
 
+    usb_serial_print("Creating UDP socket...\n");
     udp_pcb_handle = udp_new();
     if (udp_pcb_handle == NULL) {
+        usb_serial_print("==UDP socket creation FAILED!==\n");
         for (int i = 0; i < 3; i++) {
-          //  buzzer_play_tone(400, 150);
             vTaskDelay(pdMS_TO_TICKS(200));
         }
         goto exit;
     }
 
-
+    usb_serial_print("Binding to port 50000...\n");
     if (udp_bind(udp_pcb_handle, IP_ADDR_ANY, UDP_PORT) != ERR_OK) {
+        usb_serial_print("==UDP bind FAILED!==\n");
         for (int i = 0; i < 4; i++) {
-            //buzzer_play_tone(400, 150);
             vTaskDelay(pdMS_TO_TICKS(200));
         }
         goto exit;
@@ -138,9 +145,8 @@ void wifi_task(void *pvParams) {
 
     udp_recv(udp_pcb_handle, udp_recv_callback, NULL);
     
-
-    //buzzer_play_tone(3000, 300);
-
+    usb_serial_print("==UDP server ready on port 50000==\n");
+    usb_serial_print("==System ready for WiFi communication!==\n");
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -150,7 +156,6 @@ exit:
     if (udp_pcb_handle) udp_remove(udp_pcb_handle);
     cyw43_arch_deinit();
     vTaskDelete(NULL);
-    vTaskDelay(pdMS_TO_TICKS(200));
 }
 
 /**
@@ -169,8 +174,9 @@ bool wifi_send_message(const char *msg) {
     
     err_t err = udp_sendto(udp_pcb_handle, p, &dest_addr, UDP_PORT);
     
-
     pbuf_free(p);
 
     return err == ERR_OK;
 }
+
+
